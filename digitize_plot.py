@@ -98,6 +98,7 @@ def get_cct_value(image):
     footer_text = extract_text_from_roi(image, 'cct_footer')
     match = re.search(r'CCT\s*=\s*(\d+)', footer_text)
     if match:
+        print(f"  - Detected CCT: {match.group(1)}K")
         return int(match.group(1))
     return None
 
@@ -195,6 +196,8 @@ def save_data_to_csv(data, cct, output_path):
         writer.writerow([f'# Spectral Distribution Data'])
         if cct:
             writer.writerow([f'# CCT = {cct}K'])
+        else:
+            writer.writerow([f'# CCT = Unknown'])
         
         # Write data header
         writer.writerow(['Wavelength[nm]', 'Intensity[mW·m⁻²·nm⁻¹]'])
@@ -382,7 +385,7 @@ def main():
             base_name = os.path.splitext(filename)[0]
             output_path = os.path.join(output_dir, f'{base_name}.csv')
             save_data_to_csv(spectral_data, cct, output_path)
-            display_spectral_data(output_path, plot_data=plot_data)
+            # display_spectral_data(output_path, plot_data=plot_data)
             
 
 if __name__ == '__main__':
