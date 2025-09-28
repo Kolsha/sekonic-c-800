@@ -131,14 +131,16 @@ class SekonicC800Parser:
     4. Spectral data blocks for each measurement
     """
 
-    def __init__(self, file_path: str):
+    def __init__(self, file_path: str, mode: str = 'auto'):
         """
         Initialize the parser with a hex file path.
 
         Args:
             file_path: Path to the .hex backup file
+            mode: Loading mode - 'auto', 'binary', or 'hex'
         """
         self.file_path = file_path
+        self.mode = mode
         self.data: Optional[bytes] = None
         self.header: Optional[FileHeader] = None
         self.profiles: List[ProfileEntry] = []
@@ -155,7 +157,7 @@ class SekonicC800Parser:
             ValueError: If file format is invalid
             FileNotFoundError: If file doesn't exist
         """
-        self._load_file()
+        self._load_file(self.mode)
         self._parse_header()
         self._validate_format()
         self._parse_profile_directory()
@@ -163,8 +165,34 @@ class SekonicC800Parser:
 
         return self.measurements
 
-    def _load_file(self):
-        """Load and convert hex file to binary data."""
+    def _load_file(self, mode='auto'):
+        """Load and convert hex file to binary data.
+        
+        Args:
+            mode (str): Loading mode - 'auto', 'binary', or 'hex'
+                - 'auto': Try binary first, fallback to hex
+                - 'binary': Read as binary data
+                - 'hex': Read as hex text and convert
+        """
+        if mode == 'binary':
+            self._load_binary()
+        elif mode == 'hex':
+            self._load_hex()
+        elif mode == 'auto':
+            self._load_auto()
+        else:
+            raise ValueError(f"Invalid mode: {mode}. Use 'auto', 'binary', or 'hex'")
+
+    def _load_binary(self):
+        """Load file as binary data."""
+        try:
+            with open(self.file_path, "rb") as f:
+                self.data = f.read()
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Backup file not found: {self.file_path}")
+
+    def _load_hex(self):
+        """Load file as hex text and convert to binary."""
         try:
             with open(self.file_path, "r") as f:
                 hex_data = f.read().strip()
@@ -173,6 +201,13 @@ class SekonicC800Parser:
             raise FileNotFoundError(f"Backup file not found: {self.file_path}")
         except ValueError as e:
             raise ValueError(f"Invalid hex file format: {e}")
+
+    def _load_auto(self):
+        """Try binary first, fallback to hex."""
+        try:
+            self._load_hex()
+        except Exception:
+            self._load_binary()
 
     def _parse_header(self):
         """Parse the 22-byte file header."""
