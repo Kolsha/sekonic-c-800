@@ -14,9 +14,6 @@ Usage:
         print(f"CCT: {measurement.cct}K")
         print(f"Illuminance: {measurement.illuminance_lx} lx")
         print(f"CRI Ra: {measurement.cri_ra}")
-        
-Author: Claude/Cursor AI Assistant
-Date: 2024
 """
 
 import struct
@@ -95,11 +92,13 @@ class Measurement:
     
     @property
     def spd(self) -> Optional[List[float]]:
-        """Spectral Power Distribution data (380-780nm in 1nm steps)."""
-        # Find the SPD block (magic 0x81)
-        for key, block in self.spectral_blocks.items():
-            if block.magic == 0x81 and len(block.data) == 401:
-                return block.data
+        """
+        Spectral Power Distribution data.
+        This property retrieves the combined SPD data parsed from sequential blocks.
+        """
+        # The corrected parser stores the combined SPD data under this specific key.
+        if 'SPD_COMBINED' in self.spectral_blocks:
+            return self.spectral_blocks['SPD_COMBINED'].data
         return None
 
 
@@ -237,6 +236,10 @@ class SekonicC800Parser:
             record_data = self.data[offset:end_offset]
             
             measurement = self._parse_single_measurement(record_data, record_id, profile_name)
+            print("--------------------------------")
+            print(f"Measurement {record_id}")
+            print(record_data.hex(' '))
+            print("--------------------------------")
             self.measurements.append(measurement)
     
     def _parse_single_measurement(self, record_data: bytes, record_id: int, profile_name: str) -> Measurement:
@@ -338,42 +341,57 @@ class SekonicC800Parser:
             measurement.values['illuminance_lx'] = max(illuminance_candidates, key=lambda x: x[0])[1]
     
     def _parse_spectral_blocks(self, data: bytes, measurement: Measurement):
-        """Parse spectral data blocks (SPD, CRI arrays, etc.)."""
+        """
+        Parse spectral data by reading a sequence of 0x82 blocks.
+        Each block is 34 bytes (2-byte header, 32-byte payload) and contains 8 floats.
+        The full SPD spectrum is composed of 50 such blocks (400 data points).
+        """
         reader = io.BytesIO(data)
+        spd_points = []
+
+        # Find the start of the first SPD block (0x82 followed by index 0x00)
+        start_pos = data.find(b'\x82\x00')
+        if start_pos == -1:
+            return # No valid SPD data found for this measurement
         
-        while reader.tell() < len(data) - 4:
-            header = reader.read(4)
-            if len(header) < 4:
+        reader.seek(start_pos)
+        
+        expected_index = 0
+        while True:
+            # Read block header (prefix and index)
+            block_header = reader.read(2)
+            if len(block_header) < 2:
+                break # End of data
+
+            prefix, index = struct.unpack('<BB', block_header)
+
+            # Validate that this is a sequential SPD block
+            if prefix != 0x82 or index != expected_index:
+                # End of the SPD sequence
                 break
             
-            magic, index, _ = struct.unpack('<BBH', header)
-            
-            if magic not in [0x81, 0x82]:
-                break  # Not a known spectral block
-            
-            # Determine block size
-            if magic == 0x81:  # SPD block
-                num_floats = 401  # 380-780nm in 1nm steps
-            else:  # Other array blocks
-                num_floats = 30   # Smaller arrays
-            
-            # Read float data
-            data_bytes = reader.read(num_floats * 4)
-            if len(data_bytes) < num_floats * 4:
-                break
-            
-            # Skip empty blocks
-            if not any(data_bytes):
-                continue
-            
+            # Read the 32-byte payload
+            payload = reader.read(32)
+            if len(payload) < 32:
+                break # Incomplete block
+
             try:
-                values = list(struct.unpack(f'<{num_floats}f', data_bytes))
-                block_key = f"{magic:X}_{index}"
-                measurement.spectral_blocks[block_key] = SpectralDataBlock(magic, index, values)
+                # Unpack 8 little-endian floats and add to our list
+                values = struct.unpack('<8f', payload)
+                spd_points.extend(values)
+                expected_index += 1
             except struct.error:
-                # Skip corrupted blocks
-                continue
-    
+                # Corrupted block, stop processing SPD for this measurement
+                break
+        
+        # If we successfully parsed points, store them as a single combined block
+        if spd_points:
+            measurement.spectral_blocks['SPD_COMBINED'] = SpectralDataBlock(
+                magic=0x82,
+                index=0,
+                data=spd_points
+            )
+
     def _is_reasonable_value(self, value: float) -> bool:
         """Check if a float value looks reasonable for measurement data."""
         return (
@@ -382,6 +400,16 @@ class SekonicC800Parser:
             not (value != value)  # Check for NaN
         )
 
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+def plot_values(title, values):
+    """Plot the raw and dark values."""
+    plt.plot(values, label=title)
+    # plt.plot(np.array(raw_values)/np.array(dark_values), label='Corrected')
+    plt.legend()
+    plt.show()
 
 def main():
     """Example usage of the parser."""
@@ -407,6 +435,7 @@ def main():
             print(f"  CRI Ra: {measurement.cri_ra:.1f}" if measurement.cri_ra else "  CRI Ra: N/A")
             print(f"  CIE (x,y): ({measurement.cie_x:.4f}, {measurement.cie_y:.4f})" if measurement.cie_x and measurement.cie_y else "  CIE: N/A")
             print(f"  SPD points: {len(measurement.spd) if measurement.spd else 0}")
+            plot_values(f"Measurement {measurement.profile_name}_{i}", measurement.spd)
             print()
         
     except Exception as e:
