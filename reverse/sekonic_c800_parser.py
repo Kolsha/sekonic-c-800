@@ -18,6 +18,9 @@ Usage:
 
 import struct
 import io
+import argparse
+import csv
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Dict, Optional, Any, Union
@@ -293,10 +296,10 @@ class SekonicC800Parser:
             measurement = self._parse_single_measurement(
                 record_data, record_id, profile_name
             )
-            print("--------------------------------")
-            print(f"Measurement {record_id}")
-            print(record_data.hex(" "))
-            print("--------------------------------")
+            # print("--------------------------------")
+            # print(f"Measurement {record_id}")
+            # print(record_data.hex(" "))
+            # print("--------------------------------")
             self.measurements.append(measurement)
 
     def _parse_single_measurement(
@@ -483,6 +486,36 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
+def export_spd_to_csv(measurement: Measurement, output_dir: str):
+    """Export SPD data to CSV file with specified naming format."""
+    if not measurement.spd:
+        print(f"No SPD data available for measurement {measurement.record_id}")
+        return
+    
+    # Create output directory if it doesn't exist
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Generate filename: {profile_name}_{record_id}_SpectralDistribution.csv
+    filename = f"{measurement.profile_name}_{measurement.record_id:02d}_SpectralDistribution.csv"
+    filepath = os.path.join(output_dir, filename)
+    
+    wavelengths = np.arange(380, 780)
+    wavelengths = wavelengths[:len(measurement.spd)]
+    
+    # Write CSV file
+    with open(filepath, 'w', newline='') as csvfile:
+        writer = csv.writer(csvfile)
+        
+        # Write header
+        writer.writerow(['Wavelength (nm)', 'Spectral Power Density (mW·m⁻²·nm⁻¹)'])
+        
+        # Write data rows
+        for wavelength, power_density in zip(wavelengths, measurement.spd):
+            writer.writerow([f"{wavelength}", f"{power_density:.6e}"])
+    
+    print(f"Exported SPD data to: {filepath}")
+
+
 def plot_values(title, values):
     """Plot spectral power distribution values."""
     if not values:
@@ -520,14 +553,37 @@ def plot_values(title, values):
 
 def main():
     """Example usage of the parser."""
-    import sys
-
-    if len(sys.argv) != 2:
-        print("Usage: python sekonic_c800_parser.py <backup_file.hex>")
-        sys.exit(1)
+    args = argparse.ArgumentParser(
+        description="Parse Sekonic C-800 spectrometer memory backup files",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  python sekonic_c800_parser.py backup.hex
+  python sekonic_c800_parser.py backup.hex -o ./csv_exports
+  python sekonic_c800_parser.py backup.hex --output-dir ./data --plot
+        """
+    )
+    
+    args.add_argument(
+        "backup_file",
+        help="Path to the Sekonic C-800 backup file (.hex or binary)"
+    )
+    
+    args.add_argument(
+        "-o", "--output-dir",
+        help="Directory to export SPD data as CSV files (optional)"
+    )
+    
+    args.add_argument(
+        "--plot",
+        action="store_true",
+        help="Plot spectral data"
+    )
+    
+    args = args.parse_args()
 
     try:
-        parser = SekonicC800Parser(sys.argv[1])
+        parser = SekonicC800Parser(args.backup_file)
         measurements = parser.parse()
 
         print(f"Successfully parsed {len(measurements)} measurements:")
@@ -555,8 +611,16 @@ def main():
             )
             print(f"  SPD points: {len(measurement.spd) if measurement.spd else 0}")
             print(f"  SPD Scale Mode: {measurement.spd_scale_mode}")
-            plot_values(f"Measurement {measurement.profile_name}_{i}", measurement.spd)
-            print()
+            
+            # Export to CSV if output directory is specified
+            if args.output_dir:
+                export_spd_to_csv(measurement, args.output_dir)
+            
+            # Plot if not disabled
+            if args.plot:
+                plot_values(f"Measurement {measurement.profile_name}_{i}", measurement.spd)
+            
+            print("--------------------------------")
 
     except Exception as e:
         print(f"Error: {e}")
